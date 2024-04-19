@@ -48,10 +48,14 @@ pub fn Ini(comptime T: type) type {
             }
         }
 
-        pub fn readToStruct(self: *Self, path: []const u8) !T {
+        pub fn readFileToStruct(self: *Self, path: []const u8) !T {
             const file = try std.fs.cwd().openFile(path, .{});
             defer file.close();
-            var parser = ini.parse(self.allocator, file.reader());
+            return readToStruct(self, file.reader());
+        }
+
+        pub fn readToStruct(self: *Self, reader: anytype) !T {
+            var parser = ini.parse(self.allocator, reader);
             defer parser.deinit();
 
             var ns: []u8 = &.{};
@@ -61,8 +65,7 @@ pub fn Ini(comptime T: type) type {
                 switch (record) {
                     .section => |heading| {
                         ns = try self.allocator.realloc(ns, heading.len);
-                        _ = std.ascii.lowerString(ns, heading);
-                        std.mem.replaceScalar(u8, ns, ' ', '_');
+                        @memcpy(ns, heading);
                     },
                     .property => |kv| {
                         try self.setStructVal(T, &self.data, kv, ns);

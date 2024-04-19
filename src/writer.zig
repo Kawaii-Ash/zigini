@@ -2,8 +2,8 @@ const std = @import("std");
 const utils = @import("utils.zig");
 const Child = std.meta.Child;
 
-pub fn writeFromStruct(data: anytype, writer: anytype, ns: ?[]const u8) !void {
-    var should_write_ns = ns != null and ns.?.len != 0;
+pub fn writeFromStruct(data: anytype, writer: anytype, namespace: ?[]const u8) !void {
+    var should_write_ns = namespace != null and namespace.?.len != 0;
     comptime var struct_fields: []std.builtin.Type.StructField = &.{};
 
     inline for (std.meta.fields(@TypeOf(data))) |field| {
@@ -18,7 +18,7 @@ pub fn writeFromStruct(data: anytype, writer: anytype, ns: ?[]const u8) !void {
 
                 if (!utils.isDefaultValue(field, value)) {
                     if (should_write_ns) {
-                        try writer.print("[{s}]\n", .{ns.?});
+                        try writer.print("[{s}]\n", .{namespace.?});
                         should_write_ns = false;
                     }
                     if (t_info == .Optional and value == null) {
@@ -31,7 +31,7 @@ pub fn writeFromStruct(data: anytype, writer: anytype, ns: ?[]const u8) !void {
         }
     }
 
-    if (ns == null or ns.?.len == 0) {
+    if (namespace == null or namespace.?.len == 0) {
         inline for (struct_fields) |field| {
             if (@typeInfo(field.type) == .Struct) {
                 try writeFromStruct(@field(data, field.name), writer, field.name);

@@ -1,4 +1,5 @@
 const std = @import("std");
+const Child = std.meta.Child;
 
 pub fn isDefaultValue(field: anytype, field_value: field.type) bool {
     const default_value = getDefaultValue(field) catch return false;
@@ -15,7 +16,7 @@ fn getDefaultValue(comptime field: anytype) !field.type {
 }
 
 fn RemoveOptional(comptime T: type) type {
-    if (@typeInfo(T) == .Optional) return @typeInfo(T).Optional.child;
+    if (@typeInfo(T) == .Optional) return Child(T);
     return T;
 }
 
