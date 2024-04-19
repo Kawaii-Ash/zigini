@@ -49,12 +49,24 @@ pub fn Ini(comptime T: type) type {
         }
 
         pub fn readFileToStruct(self: *Self, path: []const u8) !T {
+            return self.readFileToStructWithMap(path, .{});
+        }
+
+        pub fn readFileToStructWithMap(self: *Self, path: []const u8, comptime map: anytype) !T {
             const file = try std.fs.cwd().openFile(path, .{});
             defer file.close();
-            return readToStruct(self, file.reader());
+            return self.readToStructWithMap(file.reader(), map);
         }
 
         pub fn readToStruct(self: *Self, reader: anytype) !T {
+            return self.readToStructWithMap(reader, .{});
+        }
+
+        pub fn readToStructWithMap(self: *Self, reader: anytype, comptime map: anytype) !T {
+            const string_map: ?type = if (map.len > 0) blk: {
+                break :blk std.ComptimeStringMap([:0]const u8, map);
+            } else null;
+
             var parser = ini.parse(self.allocator, reader);
             defer parser.deinit();
 
@@ -64,11 +76,23 @@ pub fn Ini(comptime T: type) type {
             while (try parser.next()) |record| {
                 switch (record) {
                     .section => |heading| {
-                        ns = try self.allocator.realloc(ns, heading.len);
-                        @memcpy(ns, heading);
+                        var mapped_heading = heading;
+
+                        if (string_map) |sm| {
+                            mapped_heading = sm.get(mapped_heading) orelse mapped_heading;
+                        }
+
+                        ns = try self.allocator.realloc(ns, mapped_heading.len);
+                        @memcpy(ns, mapped_heading);
                     },
                     .property => |kv| {
-                        try self.setStructVal(T, &self.data, kv, ns);
+                        var mapped_kv = kv;
+
+                        if (string_map) |sm| {
+                            mapped_kv.key = sm.get(mapped_kv.key) orelse mapped_kv.key;
+                        }
+
+                        try self.setStructVal(T, &self.data, mapped_kv, ns);
                     },
                     .enumeration => {},
                 }

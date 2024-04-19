@@ -1,44 +1,105 @@
 const std = @import("std");
-const Ini = @import("reader.zig").Ini;
+const ini = @import("main.zig");
+const Ini = ini.Ini;
 
 const NestedConfig = struct {
     string: []const u8 = "",
-    nt_string: [:0]const u8 = "",
     num: u8 = 0,
 };
 
 const Config = struct {
-    opt_string: ?[]const u8 = "Default String",
+    string: ?[]const u8 = "Default String",
     nt_string: [:0]const u8 = "",
     num: u8 = 1,
-    UpcaseField: u8 = 0,
-    @"nested/Config": NestedConfig = .{},
-    @"Nested Config": NestedConfig = .{},
+    nested_config: NestedConfig = .{},
+    @"Other Config": ?NestedConfig = null,
 };
 
-test "Read ini to struct" {
+test "Read ini without mapping" {
     var fbs = std.io.fixedBufferStream(
-        \\opt_string=One String
+        \\string=A String
         \\nt_string=Another String
-        \\UpcaseField=9
-        \\[nested/Config]
+        \\num=33
+        \\[nested_config]
         \\string=Nested String
-        \\num=3
-        \\[Nested Config]
-        \\string=Another Nested String
+        \\num=62
+        \\[Other Config]
+        \\num=10
     );
 
     var ini_conf = Ini(Config).init(std.testing.allocator);
     defer ini_conf.deinit();
     const config = try ini_conf.readToStruct(fbs.reader());
 
-    try std.testing.expectEqualStrings("One String", config.opt_string.?);
-    try std.testing.expectEqualSentinel(u8, 0, "Another String", config.nt_string);
-    try std.testing.expect(config.num == 1);
+    try std.testing.expectEqualStrings("A String", config.string.?);
+    try std.testing.expectEqualStrings("Another String", config.nt_string);
+    try std.testing.expectEqualStrings("Nested String", config.nested_config.string);
+    try std.testing.expect(config.num == 33);
+    try std.testing.expect(config.nested_config.num == 62);
+    try std.testing.expect(config.@"Other Config".?.num == 10);
+}
 
-    try std.testing.expect(config.@"nested/Config".num == 3);
-    try std.testing.expectEqualStrings("Nested String", config.@"nested/Config".string);
-    try std.testing.expectEqualStrings("Another Nested String", config.@"Nested Config".string);
+test "Read ini with mapping" {
+    var fbs = std.io.fixedBufferStream(
+        \\other=33
+        \\[Nested Config]
+        \\other=12
+    );
 
-    try std.testing.expect(config.UpcaseField == 9);
+    var ini_conf = Ini(Config).init(std.testing.allocator);
+    defer ini_conf.deinit();
+
+    const config = try ini_conf.readToStructWithMap(fbs.reader(), .{
+        .{ "Nested Config", "nested_config" },
+        .{ "other", "num" },
+    });
+
+    try std.testing.expect(config.num == 33);
+    try std.testing.expect(config.nested_config.num == 12);
+}
+
+test "Write without namespace" {
+    const conf = Config{
+        .num = 10,
+        .string = "String!",
+        .nested_config = .{ .num = 71, .string = "A Random String" },
+    };
+
+    var buf: [100]u8 = undefined;
+    var fbs = std.io.fixedBufferStream(&buf);
+    try ini.writeFromStructWithMap(conf, fbs.writer(), null, .{
+        .{ "nested_config", "Nested Config" },
+        .{ "string", "new_string" },
+    });
+    const ini_str = fbs.getWritten();
+
+    const expected =
+        \\new_string=String!
+        \\num=10
+        \\[Nested Config]
+        \\new_string=A Random String
+        \\num=71
+        \\
+    ;
+
+    try std.testing.expect(ini_str.len == expected.len);
+    try std.testing.expectEqualStrings(expected, ini_str);
+}
+
+test "Write with namespace" {
+    const conf = Config{ .num = 98, .string = "Some String", .nested_config = .{ .num = 71 } };
+
+    var buf: [100]u8 = undefined;
+    var fbs = std.io.fixedBufferStream(&buf);
+    try ini.writeFromStruct(conf, fbs.writer(), "A Namespace");
+    const ini_str = fbs.getWritten();
+
+    const expected =
+        \\[A Namespace]
+        \\string=Some String
+        \\num=98
+        \\
+    ;
+    try std.testing.expect(ini_str.len == expected.len);
+    try std.testing.expectEqualStrings(expected, ini_str);
 }

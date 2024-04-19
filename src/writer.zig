@@ -3,6 +3,14 @@ const utils = @import("utils.zig");
 const Child = std.meta.Child;
 
 pub fn writeFromStruct(data: anytype, writer: anytype, namespace: ?[]const u8) !void {
+    return writeFromStructWithMap(data, writer, namespace, .{});
+}
+
+pub fn writeFromStructWithMap(data: anytype, writer: anytype, namespace: ?[]const u8, comptime map: anytype) !void {
+    const string_map: ?type = if (map.len > 0) blk: {
+        break :blk std.ComptimeStringMap([:0]const u8, map);
+    } else null;
+
     var should_write_ns = namespace != null and namespace.?.len != 0;
     comptime var struct_fields: []std.builtin.Type.StructField = &.{};
 
@@ -18,13 +26,23 @@ pub fn writeFromStruct(data: anytype, writer: anytype, namespace: ?[]const u8) !
 
                 if (!utils.isDefaultValue(field, value)) {
                     if (should_write_ns) {
-                        try writer.print("[{s}]\n", .{namespace.?});
+                        var mapped_ns = namespace.?;
+                        if (string_map) |sm| {
+                            mapped_ns = sm.get(mapped_ns) orelse mapped_ns;
+                        }
+                        try writer.print("[{s}]\n", .{mapped_ns});
                         should_write_ns = false;
                     }
+
+                    comptime var field_name = field.name;
+                    comptime if (string_map) |sm| {
+                        field_name = sm.get(field_name) orelse field_name;
+                    };
+
                     if (t_info == .Optional and value == null) {
-                        try writeProperty(writer, field.name, "");
+                        try writeProperty(writer, field_name, "");
                     } else {
-                        try writeProperty(writer, field.name, utils.unwrapIfOptional(field.type, value));
+                        try writeProperty(writer, field_name, utils.unwrapIfOptional(field.type, value));
                     }
                 }
             },
@@ -34,9 +52,9 @@ pub fn writeFromStruct(data: anytype, writer: anytype, namespace: ?[]const u8) !
     if (namespace == null or namespace.?.len == 0) {
         inline for (struct_fields) |field| {
             if (@typeInfo(field.type) == .Struct) {
-                try writeFromStruct(@field(data, field.name), writer, field.name);
+                try writeFromStructWithMap(@field(data, field.name), writer, field.name, map);
             } else if (@field(data, field.name)) |inner_data| {
-                try writeFromStruct(inner_data, writer, field.name);
+                try writeFromStructWithMap(inner_data, writer, field.name, map);
             }
         }
     }
