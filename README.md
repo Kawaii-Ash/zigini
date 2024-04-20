@@ -2,7 +2,7 @@
 
 A Zig library to read/write an ini file using a struct.
 
-Zig Version: 0.11.0
+This library follows the Zig master branch. Check releases if you're using an old version.
 
 ## Usage
 

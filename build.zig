@@ -7,11 +7,9 @@ pub fn build(b: *std.Build) void {
     const ini = b.dependency("ini", .{});
 
     const zigini = b.addModule("zigini", .{
-        .source_file = .{ .path = "src/main.zig" },
-        .dependencies = &.{
-            .{ .name = "ini", .module = ini.module("ini") },
-        },
+        .root_source_file = .{ .path = "src/main.zig" },
     });
+    zigini.addImport("ini", ini.module("ini"));
 
     const example = b.addExecutable(.{
         .name = "example",
@@ -19,7 +17,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
-    example.addModule("zigini", zigini);
+    example.root_module.addImport("zigini", zigini);
 
     const example_exe = b.addRunArtifact(example);
 
@@ -31,7 +29,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
-    tests.addModule("ini", ini.module("ini"));
+    tests.root_module.addImport("ini", ini.module("ini"));
 
     const run_tests = b.addRunArtifact(tests);
 
