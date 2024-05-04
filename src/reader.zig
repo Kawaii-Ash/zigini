@@ -132,7 +132,14 @@ pub fn Ini(comptime T: type) type {
 
         fn convert(self: Self, comptime T1: type, val: []const u8) !T1 {
             return switch (@typeInfo(T1)) {
-                .Int => try std.fmt.parseInt(T1, val, 0),
+                .Int => {
+                    if (val.len == 1) {
+                        const char = val[0];
+                        if (std.ascii.isASCII(char) and !std.ascii.isDigit(char))
+                            return char;
+                    }
+                    return try std.fmt.parseInt(T1, val, 0);
+                },
                 .Float => try std.fmt.parseFloat(T1, val),
                 .Bool => trueOrFalse.get(val) orelse error.InvalidValue,
                 .Enum => std.meta.stringToEnum(T1, val) orelse error.InvalidValue,
