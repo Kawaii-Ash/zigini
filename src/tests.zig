@@ -18,6 +18,7 @@ const Config = struct {
 test "Read ini without mapping" {
     var fbs = std.io.fixedBufferStream(
         \\string=A String
+        \\string=Default String
         \\nt_string=Another String
         \\num=33
         \\[nested_config]
@@ -31,7 +32,7 @@ test "Read ini without mapping" {
     defer ini_conf.deinit();
     const config = try ini_conf.readToStruct(fbs.reader());
 
-    try std.testing.expectEqualStrings("A String", config.string.?);
+    try std.testing.expectEqualStrings("Default String", config.string.?);
     try std.testing.expectEqualStrings("Another String", config.nt_string);
     try std.testing.expectEqualStrings("Nested String", config.nested_config.string);
     try std.testing.expect(config.num == 33);

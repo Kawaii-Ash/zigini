@@ -48,6 +48,20 @@ pub fn Ini(comptime T: type) type {
             }
         }
 
+        fn free_field(self: *Self, data: anytype, field: anytype) void {
+            const val = @field(data, field.name);
+            comptime var field_type = field.type;
+            comptime var t_info = @typeInfo(field_type);
+            if (t_info == .Optional) {
+                if (val == null) return;
+                field_type = Child(field_type);
+                t_info = @typeInfo(field_type);
+            }
+
+            if (t_info == .Pointer and !utils.isDefaultValue(field, val))
+                self.allocator.free(utils.unwrapIfOptional(field.type, val));
+        }
+
         pub fn readFileToStruct(self: *Self, path: []const u8) !T {
             return self.readFileToStructWithMap(path, .{});
         }
@@ -101,7 +115,7 @@ pub fn Ini(comptime T: type) type {
             return self.data;
         }
 
-        fn setStructVal(self: Self, comptime T1: type, data: *T1, kv: ini.KeyValue, ns: []const u8) !void {
+        fn setStructVal(self: *Self, comptime T1: type, data: *T1, kv: ini.KeyValue, ns: []const u8) !void {
             inline for (std.meta.fields(T1)) |field| {
                 const field_info = @typeInfo(field.type);
                 const is_opt_struct = field_info == .Optional and @typeInfo(Child(field.type)) == .Struct;
@@ -119,13 +133,8 @@ pub fn Ini(comptime T: type) type {
                     }
                 } else if (ns.len == 0 and std.ascii.eqlIgnoreCase(field.name, kv.key)) {
                     const conv_value = try self.convert(field.type, kv.value);
-                    if (utils.isDefaultValue(field, conv_value)) {
-                        if (field_info == .Optional and @typeInfo(Child(field.type)) == .Pointer) {
-                            if (conv_value != null) self.allocator.free(conv_value.?);
-                        } else if (field_info == .Pointer) self.allocator.free(conv_value);
-                    } else {
-                        @field(data, field.name) = conv_value;
-                    }
+                    if (!utils.isDefaultValue(field, @field(data, field.name))) self.free_field(data, field);
+                    @field(data, field.name) = conv_value;
                 }
             }
         }
