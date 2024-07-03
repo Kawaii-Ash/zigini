@@ -3,7 +3,7 @@ const utils = @import("utils.zig");
 const ini = @import("ini");
 const Child = std.meta.Child;
 
-const trueOrFalse = std.ComptimeStringMap(bool, .{
+const boolStringMap = std.StaticStringMap(bool).initComptime(.{
     .{ "true", true },
     .{ "false", false },
     .{ "1", true },
@@ -77,8 +77,8 @@ pub fn Ini(comptime T: type) type {
         }
 
         pub fn readToStructWithMap(self: *Self, reader: anytype, comptime map: anytype) !T {
-            const string_map: ?type = if (map.len > 0) blk: {
-                break :blk std.ComptimeStringMap([:0]const u8, map);
+            const string_map: ?std.StaticStringMap([:0]const u8) = if (map.len > 0) blk: {
+                break :blk std.StaticStringMap([:0]const u8).initComptime(map);
             } else null;
 
             var parser = ini.parse(self.allocator, reader);
@@ -150,7 +150,7 @@ pub fn Ini(comptime T: type) type {
                     return try std.fmt.parseInt(T1, val, 0);
                 },
                 .Float => try std.fmt.parseFloat(T1, val),
-                .Bool => trueOrFalse.get(val) orelse error.InvalidValue,
+                .Bool => boolStringMap.get(val) orelse error.InvalidValue,
                 .Enum => std.meta.stringToEnum(T1, val) orelse error.InvalidValue,
                 .Optional => |opt| {
                     if (val.len == 0 or std.mem.eql(u8, val, "null")) return null;

@@ -7,13 +7,13 @@ pub fn build(b: *std.Build) void {
     const ini = b.dependency("ini", .{});
 
     const zigini = b.addModule("zigini", .{
-        .root_source_file = .{ .path = "src/main.zig" },
+        .root_source_file = b.path("src/main.zig"),
     });
     zigini.addImport("ini", ini.module("ini"));
 
     const example = b.addExecutable(.{
         .name = "example",
-        .root_source_file = .{ .path = "example/example.zig" },
+        .root_source_file = b.path("example/example.zig"),
         .target = target,
         .optimize = optimize,
     });
@@ -25,7 +25,7 @@ pub fn build(b: *std.Build) void {
     example_step.dependOn(&example_exe.step);
 
     const tests = b.addTest(.{
-        .root_source_file = .{ .path = "src/tests.zig" },
+        .root_source_file = b.path("src/tests.zig"),
         .target = target,
         .optimize = optimize,
     });

@@ -7,8 +7,8 @@ pub fn writeFromStruct(data: anytype, writer: anytype, namespace: ?[]const u8) !
 }
 
 pub fn writeFromStructWithMap(data: anytype, writer: anytype, namespace: ?[]const u8, comptime map: anytype) !void {
-    const string_map: ?type = if (map.len > 0) blk: {
-        break :blk std.ComptimeStringMap([:0]const u8, map);
+    const string_map: ?std.StaticStringMap([:0]const u8) = if (map.len > 0) blk: {
+        break :blk std.StaticStringMap([:0]const u8).initComptime(map);
     } else null;
 
     var should_write_ns = namespace != null and namespace.?.len != 0;
