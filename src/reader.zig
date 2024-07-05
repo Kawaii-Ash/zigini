@@ -6,17 +6,17 @@ const Child = std.meta.Child;
 
 const is_12 = builtin.zig_version.minor == 12;
 
-const boolStringMap = if (is_12) std.ComptimeStringMap(bool, .{
+const bool_string = .{
     .{ "true", true },
     .{ "false", false },
     .{ "1", true },
     .{ "0", false },
-}) else std.StaticStringMap(bool).initComptime(.{
-    .{ "true", true },
-    .{ "false", false },
-    .{ "1", true },
-    .{ "0", false },
-});
+};
+
+const boolStringMap = if (is_12)
+    std.ComptimeStringMap(bool, bool_string)
+else
+    std.StaticStringMap(bool).initComptime(bool_string);
 
 pub fn Ini(comptime T: type) type {
     return struct {
