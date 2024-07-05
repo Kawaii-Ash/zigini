@@ -1,14 +1,17 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const utils = @import("utils.zig");
 const Child = std.meta.Child;
+
+const is_12 = builtin.zig_version.minor == 12;
 
 pub fn writeFromStruct(data: anytype, writer: anytype, namespace: ?[]const u8) !void {
     return writeFromStructWithMap(data, writer, namespace, .{});
 }
 
 pub fn writeFromStructWithMap(data: anytype, writer: anytype, namespace: ?[]const u8, comptime map: anytype) !void {
-    const string_map: ?std.StaticStringMap([:0]const u8) = if (map.len > 0) blk: {
-        break :blk std.StaticStringMap([:0]const u8).initComptime(map);
+    const string_map: ?if (is_12) type else std.StaticStringMap([:0]const u8) = if (map.len > 0) blk: {
+        break :blk if (is_12) std.ComptimeStringMap([:0]const u8, map) else std.StaticStringMap([:0]const u8).initComptime(map);
     } else null;
 
     var should_write_ns = namespace != null and namespace.?.len != 0;

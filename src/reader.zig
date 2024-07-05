@@ -1,9 +1,17 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const utils = @import("utils.zig");
 const ini = @import("ini");
 const Child = std.meta.Child;
 
-const boolStringMap = std.StaticStringMap(bool).initComptime(.{
+const is_12 = builtin.zig_version.minor == 12;
+
+const boolStringMap = if (is_12) std.ComptimeStringMap(bool, .{
+    .{ "true", true },
+    .{ "false", false },
+    .{ "1", true },
+    .{ "0", false },
+}) else std.StaticStringMap(bool).initComptime(.{
     .{ "true", true },
     .{ "false", false },
     .{ "1", true },
@@ -77,8 +85,8 @@ pub fn Ini(comptime T: type) type {
         }
 
         pub fn readToStructWithMap(self: *Self, reader: anytype, comptime map: anytype) !T {
-            const string_map: ?std.StaticStringMap([:0]const u8) = if (map.len > 0) blk: {
-                break :blk std.StaticStringMap([:0]const u8).initComptime(map);
+            const string_map: ?if (is_12) type else std.StaticStringMap([:0]const u8) = if (map.len > 0) blk: {
+                break :blk if (is_12) std.ComptimeStringMap([:0]const u8, map) else std.StaticStringMap([:0]const u8).initComptime(map);
             } else null;
 
             var parser = ini.parse(self.allocator, reader);
