@@ -37,7 +37,7 @@ test "Read ini without mapping" {
 
     var ini_conf = Ini(Config).init(std.testing.allocator);
     defer ini_conf.deinit();
-    const config = try ini_conf.readToStruct(fbs.reader(), null);
+    const config = try ini_conf.readToStruct(fbs.reader(), null, null);
 
     try std.testing.expectEqualStrings("Default String", config.string.?);
     try std.testing.expectEqualStrings("Another String", config.nt_string);
@@ -57,7 +57,7 @@ test "Read ini with mapping" {
     var ini_conf = Ini(Config).init(std.testing.allocator);
     defer ini_conf.deinit();
 
-    const config = try ini_conf.readToStruct(fbs.reader(), handleIncorrectConfigField);
+    const config = try ini_conf.readToStruct(fbs.reader(), handleIncorrectConfigField, null);
 
     try std.testing.expect(config.num == 33);
     try std.testing.expect(config.nested_config.num == 12);
