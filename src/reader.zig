@@ -18,9 +18,15 @@ const boolStringMap = if (is_12)
 else
     std.StaticStringMap(bool).initComptime(bool_string);
 
+pub const HandlerResult = struct {
+    changed: enum { key, value },
+    str: []const u8,
+};
+
 pub fn Ini(comptime T: type) type {
     return struct {
         const Self = @This();
+        const HandleIncorrectFieldFn = fn ([]const u8, []const u8) ?HandlerResult;
 
         data: T,
         allocator: std.mem.Allocator,
@@ -70,13 +76,13 @@ pub fn Ini(comptime T: type) type {
                 self.allocator.free(utils.unwrapIfOptional(field.type, val));
         }
 
-        pub fn readFileToStruct(self: *Self, path: []const u8, comptime handle_incorrect_field_fn: ?fn ([]const u8, []const u8) ?[]const u8) !T {
+        pub fn readFileToStruct(self: *Self, path: []const u8, comptime handle_incorrect_field_fn: ?HandleIncorrectFieldFn) !T {
             const file = try std.fs.cwd().openFile(path, .{});
             defer file.close();
             return self.readToStruct(file.reader(), handle_incorrect_field_fn);
         }
 
-        pub fn readToStruct(self: *Self, reader: anytype, comptime handle_incorrect_field_fn: ?fn ([]const u8, []const u8) ?[]const u8) !T {
+        pub fn readToStruct(self: *Self, reader: anytype, comptime handle_incorrect_field_fn: ?HandleIncorrectFieldFn) !T {
             var parser = ini.parse(self.allocator, reader);
             defer parser.deinit();
 
@@ -90,35 +96,7 @@ pub fn Ini(comptime T: type) type {
                         @memcpy(ns, heading);
                     },
                     .property => |kv| {
-                        self.setStructVal(T, &self.data, kv, ns) catch |err| {
-                            if (err == error.FieldNotFound) {
-                                if (handle_incorrect_field_fn == null) continue;
-
-                                const maybe_new_key = @call(.always_inline, handle_incorrect_field_fn.?, .{ kv.key, kv.value });
-                                if (maybe_new_key) |new_key| {
-                                    const terminated_key = try self.allocator.dupeZ(u8, new_key);
-                                    defer self.allocator.free(terminated_key);
-
-                                    try self.setStructVal(T, &self.data, .{ .key = terminated_key, .value = kv.value }, ns);
-                                }
-
-                                continue;
-                            } else if (err == error.InvalidValue) {
-                                if (handle_incorrect_field_fn == null) continue;
-
-                                const maybe_new_value = @call(.always_inline, handle_incorrect_field_fn.?, .{ kv.key, kv.value });
-                                if (maybe_new_value) |new_value| {
-                                    const terminated_value = try self.allocator.dupeZ(u8, new_value);
-                                    defer self.allocator.free(terminated_value);
-
-                                    try self.setStructVal(T, &self.data, .{ .key = kv.key, .value = terminated_value }, ns);
-                                }
-
-                                continue;
-                            }
-
-                            return err;
-                        };
+                        try self.setStructVal(T, &self.data, kv, ns, handle_incorrect_field_fn);
                     },
                     .enumeration => {},
                 }
@@ -127,33 +105,71 @@ pub fn Ini(comptime T: type) type {
             return self.data;
         }
 
-        fn setStructVal(self: *Self, comptime T1: type, data: *T1, kv: ini.KeyValue, ns: []const u8) !void {
-            var field_found = false;
-
+        fn setStructVal(
+            self: *Self,
+            comptime T1: type,
+            data: *T1,
+            kv: ini.KeyValue,
+            ns: []const u8,
+            comptime handle_incorrect_field_fn: ?HandleIncorrectFieldFn,
+        ) !void {
             inline for (std.meta.fields(T1)) |field| {
                 const field_info = @typeInfo(field.type);
                 const is_opt_struct = field_info == .Optional and @typeInfo(Child(field.type)) == .Struct;
+
                 if (field_info == .Struct or is_opt_struct) {
-                    if (ns.len != 0 and std.ascii.eqlIgnoreCase(field.name, ns)) {
-                        comptime var field_type = field.type;
-                        if (field_info == .Optional) {
-                            field_type = Child(field_type);
-                            if (@field(data, field.name) == null)
-                                @field(data, field.name) = field_type{};
+                    if (ns.len != 0) {
+                        var namespace = ns;
+
+                        if (handle_incorrect_field_fn) |handle_incorrect_field| {
+                            const maybe_new_ns = @call(.always_inline, handle_incorrect_field, .{ ns, "" });
+                            if (maybe_new_ns) |new_ns| {
+                                namespace = new_ns.str;
+                            }
                         }
-                        var inner_struct = utils.unwrapIfOptional(field.type, @field(data, field.name));
-                        try self.setStructVal(field_type, &inner_struct, kv, "");
-                        @field(data, field.name) = inner_struct;
+
+                        if (std.ascii.eqlIgnoreCase(field.name, namespace)) {
+                            comptime var field_type = field.type;
+                            if (field_info == .Optional) {
+                                field_type = Child(field_type);
+                                if (@field(data, field.name) == null)
+                                    @field(data, field.name) = field_type{};
+                            }
+                            var inner_struct = utils.unwrapIfOptional(field.type, @field(data, field.name));
+                            try self.setStructVal(field_type, &inner_struct, kv, "", handle_incorrect_field_fn);
+                            @field(data, field.name) = inner_struct;
+                        }
                     }
-                } else if (ns.len == 0 and std.ascii.eqlIgnoreCase(field.name, kv.key)) {
-                    field_found = true;
-                    const conv_value = try self.convert(field.type, kv.value);
-                    if (!utils.isDefaultValue(field, @field(data, field.name))) self.free_field(data, field);
-                    @field(data, field.name) = conv_value;
+                } else if (ns.len == 0) {
+                    var key: []const u8 = kv.key;
+                    var key_changed = false;
+
+                    if (handle_incorrect_field_fn) |handle_incorrect_field| {
+                        const maybe_new_key = @call(.always_inline, handle_incorrect_field, .{ kv.key, kv.value });
+                        if (maybe_new_key) |new_key| {
+                            if (new_key.changed == .key) {
+                                key = new_key.str;
+                                key_changed = true;
+                            }
+                        }
+                    }
+
+                    if (std.ascii.eqlIgnoreCase(field.name, key)) {
+                        var value: []const u8 = kv.value;
+
+                        if (!key_changed) {
+                            if (handle_incorrect_field_fn) |handle_incorrect_field| {
+                                const maybe_new_value = @call(.always_inline, handle_incorrect_field, .{ kv.key, kv.value });
+                                if (maybe_new_value) |new_value| value = new_value.str;
+                            }
+                        }
+
+                        const conv_value = try self.convert(field.type, value);
+                        if (!utils.isDefaultValue(field, @field(data, field.name))) self.free_field(data, field);
+                        @field(data, field.name) = conv_value;
+                    }
                 }
             }
-
-            if (!field_found) return error.FieldNotFound;
         }
 
         fn convert(self: Self, comptime T1: type, val: []const u8) !T1 {

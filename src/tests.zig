@@ -15,9 +15,9 @@ const Config = struct {
     @"Other Config": ?NestedConfig = null,
 };
 
-fn handleIncorrectConfigField(key: []const u8, _: []const u8) ?[]const u8 {
-    if (std.mem.eql(u8, key, "Nested Config")) return "nested_config";
-    if (std.mem.eql(u8, key, "other")) return "num";
+fn handleIncorrectConfigField(key: []const u8, _: []const u8) ?ini.HandlerResult {
+    if (std.mem.eql(u8, key, "Nested Config")) return .{ .changed = .key, .str = "nested_config" };
+    if (std.mem.eql(u8, key, "other")) return .{ .changed = .key, .str = "num" };
 
     return null;
 }
@@ -37,7 +37,7 @@ test "Read ini without mapping" {
 
     var ini_conf = Ini(Config).init(std.testing.allocator);
     defer ini_conf.deinit();
-    const config = try ini_conf.readToStruct(fbs.reader());
+    const config = try ini_conf.readToStruct(fbs.reader(), null);
 
     try std.testing.expectEqualStrings("Default String", config.string.?);
     try std.testing.expectEqualStrings("Another String", config.nt_string);
