@@ -1,14 +1,13 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const utils = @import("utils.zig");
 const Child = std.meta.Child;
 
-pub fn writeFromStruct(data: anytype, writer: anytype, namespace: ?[]const u8) !void {
-    return writeFromStructWithMap(data, writer, namespace, .{});
-}
+const is_12 = builtin.zig_version.minor == 12;
 
-pub fn writeFromStructWithMap(data: anytype, writer: anytype, namespace: ?[]const u8, comptime map: anytype) !void {
-    const string_map: ?std.StaticStringMap([:0]const u8) = if (map.len > 0) blk: {
-        break :blk std.StaticStringMap([:0]const u8).initComptime(map);
+pub fn writeFromStruct(data: anytype, writer: anytype, namespace: ?[]const u8, write_all_fields: bool, comptime map: anytype) !void {
+    const string_map: ?if (is_12) type else std.StaticStringMap([:0]const u8) = if (map.len > 0) blk: {
+        break :blk if (is_12) std.ComptimeStringMap([:0]const u8, map) else std.StaticStringMap([:0]const u8).initComptime(map);
     } else null;
 
     var should_write_ns = namespace != null and namespace.?.len != 0;
@@ -24,7 +23,7 @@ pub fn writeFromStructWithMap(data: anytype, writer: anytype, namespace: ?[]cons
                 }
                 const value = @field(data, field.name);
 
-                if (!utils.isDefaultValue(field, value)) {
+                if (!utils.isDefaultValue(field, value) or write_all_fields) {
                     if (should_write_ns) {
                         var mapped_ns = namespace.?;
                         if (string_map) |sm| {
@@ -40,7 +39,7 @@ pub fn writeFromStructWithMap(data: anytype, writer: anytype, namespace: ?[]cons
                     };
 
                     if (t_info == .Optional and value == null) {
-                        try writeProperty(writer, field_name, "");
+                        try writeProperty(writer, field_name, "null");
                     } else {
                         try writeProperty(writer, field_name, utils.unwrapIfOptional(field.type, value));
                     }
@@ -52,9 +51,9 @@ pub fn writeFromStructWithMap(data: anytype, writer: anytype, namespace: ?[]cons
     if (namespace == null or namespace.?.len == 0) {
         inline for (struct_fields) |field| {
             if (@typeInfo(field.type) == .Struct) {
-                try writeFromStructWithMap(@field(data, field.name), writer, field.name, map);
+                try writeFromStruct(@field(data, field.name), writer, field.name, write_all_fields, map);
             } else if (@field(data, field.name)) |inner_data| {
-                try writeFromStructWithMap(inner_data, writer, field.name, map);
+                try writeFromStruct(inner_data, writer, field.name, write_all_fields, map);
             }
         }
     }
@@ -63,7 +62,7 @@ pub fn writeFromStructWithMap(data: anytype, writer: anytype, namespace: ?[]cons
 fn writeProperty(writer: anytype, field_name: []const u8, val: anytype) !void {
     switch (@typeInfo(@TypeOf(val))) {
         .Bool => {
-            try writer.print("{s}={d}\n", .{ field_name, @intFromBool(val) });
+            try writer.print("{s}={s}\n", .{ field_name, if (val) "true" else "false" });
         },
         .Int, .ComptimeInt, .Float, .ComptimeFloat => {
             try writer.print("{s}={d}\n", .{ field_name, val });

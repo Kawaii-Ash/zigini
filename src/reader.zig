@@ -1,14 +1,22 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const utils = @import("utils.zig");
 const ini = @import("ini");
 const Child = std.meta.Child;
 
-const boolStringMap = std.StaticStringMap(bool).initComptime(.{
+const is_12 = builtin.zig_version.minor == 12;
+
+const bool_string = .{
     .{ "true", true },
     .{ "false", false },
     .{ "1", true },
     .{ "0", false },
-});
+};
+
+const boolStringMap = if (is_12)
+    std.ComptimeStringMap(bool, bool_string)
+else
+    std.StaticStringMap(bool).initComptime(bool_string);
 
 pub fn Ini(comptime T: type) type {
     return struct {
@@ -62,25 +70,13 @@ pub fn Ini(comptime T: type) type {
                 self.allocator.free(utils.unwrapIfOptional(field.type, val));
         }
 
-        pub fn readFileToStruct(self: *Self, path: []const u8) !T {
-            return self.readFileToStructWithMap(path, .{});
-        }
-
-        pub fn readFileToStructWithMap(self: *Self, path: []const u8, comptime map: anytype) !T {
+        pub fn readFileToStruct(self: *Self, path: []const u8, comptime handle_incorrect_field_fn: ?fn ([]const u8, []const u8) ?[]const u8) !T {
             const file = try std.fs.cwd().openFile(path, .{});
             defer file.close();
-            return self.readToStructWithMap(file.reader(), map);
+            return self.readToStruct(file.reader(), handle_incorrect_field_fn);
         }
 
-        pub fn readToStruct(self: *Self, reader: anytype) !T {
-            return self.readToStructWithMap(reader, .{});
-        }
-
-        pub fn readToStructWithMap(self: *Self, reader: anytype, comptime map: anytype) !T {
-            const string_map: ?std.StaticStringMap([:0]const u8) = if (map.len > 0) blk: {
-                break :blk std.StaticStringMap([:0]const u8).initComptime(map);
-            } else null;
-
+        pub fn readToStruct(self: *Self, reader: anytype, comptime handle_incorrect_field_fn: ?fn ([]const u8, []const u8) ?[]const u8) !T {
             var parser = ini.parse(self.allocator, reader);
             defer parser.deinit();
 
@@ -90,23 +86,39 @@ pub fn Ini(comptime T: type) type {
             while (try parser.next()) |record| {
                 switch (record) {
                     .section => |heading| {
-                        var mapped_heading = heading;
-
-                        if (string_map) |sm| {
-                            mapped_heading = sm.get(mapped_heading) orelse mapped_heading;
-                        }
-
-                        ns = try self.allocator.realloc(ns, mapped_heading.len);
-                        @memcpy(ns, mapped_heading);
+                        ns = try self.allocator.realloc(ns, heading.len);
+                        @memcpy(ns, heading);
                     },
                     .property => |kv| {
-                        var mapped_kv = kv;
+                        self.setStructVal(T, &self.data, kv, ns) catch |err| {
+                            if (err == error.FieldNotFound) {
+                                if (handle_incorrect_field_fn == null) continue;
 
-                        if (string_map) |sm| {
-                            mapped_kv.key = sm.get(mapped_kv.key) orelse mapped_kv.key;
-                        }
+                                const maybe_new_key = @call(.always_inline, handle_incorrect_field_fn.?, .{ kv.key, kv.value });
+                                if (maybe_new_key) |new_key| {
+                                    const terminated_key = try self.allocator.dupeZ(u8, new_key);
+                                    defer self.allocator.free(terminated_key);
 
-                        try self.setStructVal(T, &self.data, mapped_kv, ns);
+                                    try self.setStructVal(T, &self.data, .{ .key = terminated_key, .value = kv.value }, ns);
+                                }
+
+                                continue;
+                            } else if (err == error.InvalidValue) {
+                                if (handle_incorrect_field_fn == null) continue;
+
+                                const maybe_new_value = @call(.always_inline, handle_incorrect_field_fn.?, .{ kv.key, kv.value });
+                                if (maybe_new_value) |new_value| {
+                                    const terminated_value = try self.allocator.dupeZ(u8, new_value);
+                                    defer self.allocator.free(terminated_value);
+
+                                    try self.setStructVal(T, &self.data, .{ .key = kv.key, .value = terminated_value }, ns);
+                                }
+
+                                continue;
+                            }
+
+                            return err;
+                        };
                     },
                     .enumeration => {},
                 }
@@ -116,6 +128,8 @@ pub fn Ini(comptime T: type) type {
         }
 
         fn setStructVal(self: *Self, comptime T1: type, data: *T1, kv: ini.KeyValue, ns: []const u8) !void {
+            var field_found = false;
+
             inline for (std.meta.fields(T1)) |field| {
                 const field_info = @typeInfo(field.type);
                 const is_opt_struct = field_info == .Optional and @typeInfo(Child(field.type)) == .Struct;
@@ -132,11 +146,14 @@ pub fn Ini(comptime T: type) type {
                         @field(data, field.name) = inner_struct;
                     }
                 } else if (ns.len == 0 and std.ascii.eqlIgnoreCase(field.name, kv.key)) {
+                    field_found = true;
                     const conv_value = try self.convert(field.type, kv.value);
                     if (!utils.isDefaultValue(field, @field(data, field.name))) self.free_field(data, field);
                     @field(data, field.name) = conv_value;
                 }
             }
+
+            if (!field_found) return error.FieldNotFound;
         }
 
         fn convert(self: Self, comptime T1: type, val: []const u8) !T1 {
@@ -147,7 +164,7 @@ pub fn Ini(comptime T: type) type {
                         if (std.ascii.isASCII(char) and !std.ascii.isDigit(char))
                             return char;
                     }
-                    return try std.fmt.parseInt(T1, val, 0);
+                    return std.fmt.parseInt(T1, val, 0) catch return error.InvalidValue;
                 },
                 .Float => try std.fmt.parseFloat(T1, val),
                 .Bool => boolStringMap.get(val) orelse error.InvalidValue,

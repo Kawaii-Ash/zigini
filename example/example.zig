@@ -10,10 +10,10 @@ pub fn main() !void {
     var config_reader = zigini.Ini(Config).init(allocator);
     defer config_reader.deinit();
 
-    const config = try config_reader.readFileToStruct("example/config.ini");
+    const config = try config_reader.readFileToStruct("example/config.ini", null);
 
     std.debug.print("Writing ini file to stdout...\n\n", .{});
 
     const stdout = std.io.getStdOut();
-    try zigini.writeFromStruct(config, stdout.writer(), null);
+    try zigini.writeFromStruct(config, stdout.writer(), null, false, .{});
 }
