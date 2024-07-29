@@ -1,18 +1,34 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const utils = @import("utils.zig");
 const ini = @import("ini");
 const Child = std.meta.Child;
 
-const boolStringMap = std.StaticStringMap(bool).initComptime(.{
+const is_12 = builtin.zig_version.minor == 12;
+
+const bool_string = .{
     .{ "true", true },
     .{ "false", false },
     .{ "1", true },
     .{ "0", false },
-});
+};
+
+const boolStringMap = if (is_12)
+    std.ComptimeStringMap(bool, bool_string)
+else
+    std.StaticStringMap(bool).initComptime(bool_string);
+
+pub const IniField = struct {
+    header: []const u8 = "",
+    key: []const u8,
+    value: []const u8,
+    allocated: struct { header: bool = false, key: bool = false, value: bool = false } = .{},
+};
 
 pub fn Ini(comptime T: type) type {
     return struct {
         const Self = @This();
+        const FieldHandlerFn = fn (allocator: std.mem.Allocator, field: IniField) ?IniField;
 
         data: T,
         allocator: std.mem.Allocator,
@@ -62,26 +78,14 @@ pub fn Ini(comptime T: type) type {
                 self.allocator.free(utils.unwrapIfOptional(field.type, val));
         }
 
-        pub fn readFileToStruct(self: *Self, path: []const u8) !T {
-            return self.readFileToStructWithMap(path, .{});
-        }
-
-        pub fn readFileToStructWithMap(self: *Self, path: []const u8, comptime map: anytype) !T {
+        pub fn readFileToStruct(self: *Self, path: []const u8, comment_characters: []const u8, comptime handler: ?FieldHandlerFn) !T {
             const file = try std.fs.cwd().openFile(path, .{});
             defer file.close();
-            return self.readToStructWithMap(file.reader(), map);
+            return self.readToStruct(file.reader(), comment_characters, handler);
         }
 
-        pub fn readToStruct(self: *Self, reader: anytype) !T {
-            return self.readToStructWithMap(reader, .{});
-        }
-
-        pub fn readToStructWithMap(self: *Self, reader: anytype, comptime map: anytype) !T {
-            const string_map: ?std.StaticStringMap([:0]const u8) = if (map.len > 0) blk: {
-                break :blk std.StaticStringMap([:0]const u8).initComptime(map);
-            } else null;
-
-            var parser = ini.parse(self.allocator, reader);
+        pub fn readToStruct(self: *Self, reader: anytype, comment_characters: []const u8, comptime handler_opt: ?FieldHandlerFn) !T {
+            var parser = ini.parse(self.allocator, reader, comment_characters);
             defer parser.deinit();
 
             var ns: []u8 = &.{};
@@ -90,23 +94,20 @@ pub fn Ini(comptime T: type) type {
             while (try parser.next()) |record| {
                 switch (record) {
                     .section => |heading| {
-                        var mapped_heading = heading;
-
-                        if (string_map) |sm| {
-                            mapped_heading = sm.get(mapped_heading) orelse mapped_heading;
-                        }
-
-                        ns = try self.allocator.realloc(ns, mapped_heading.len);
-                        @memcpy(ns, mapped_heading);
+                        ns = try self.allocator.realloc(ns, heading.len);
+                        @memcpy(ns, heading);
                     },
                     .property => |kv| {
-                        var mapped_kv = kv;
+                        var ini_hkv_opt: ?IniField = .{ .key = kv.key, .value = kv.value, .header = ns };
+                        if (handler_opt) |handler| ini_hkv_opt = @call(.always_inline, handler, .{ self.allocator, ini_hkv_opt.? });
+                        if (ini_hkv_opt) |ini_hkv| {
+                            try self.setStructVal(T, &self.data, ini_hkv);
 
-                        if (string_map) |sm| {
-                            mapped_kv.key = sm.get(mapped_kv.key) orelse mapped_kv.key;
+                            // Check if they were allocated by the handler fn and free if needed
+                            if (ini_hkv.allocated.header) self.allocator.free(ini_hkv.header);
+                            if (ini_hkv.allocated.key) self.allocator.free(ini_hkv.key);
+                            if (ini_hkv.allocated.value) self.allocator.free(ini_hkv.value);
                         }
-
-                        try self.setStructVal(T, &self.data, mapped_kv, ns);
                     },
                     .enumeration => {},
                 }
@@ -115,12 +116,12 @@ pub fn Ini(comptime T: type) type {
             return self.data;
         }
 
-        fn setStructVal(self: *Self, comptime T1: type, data: *T1, kv: ini.KeyValue, ns: []const u8) !void {
+        fn setStructVal(self: *Self, comptime T1: type, data: *T1, ini_hkv: IniField) !void {
             inline for (std.meta.fields(T1)) |field| {
                 const field_info = @typeInfo(field.type);
                 const is_opt_struct = field_info == .Optional and @typeInfo(Child(field.type)) == .Struct;
                 if (field_info == .Struct or is_opt_struct) {
-                    if (ns.len != 0 and std.ascii.eqlIgnoreCase(field.name, ns)) {
+                    if (ini_hkv.header.len != 0 and std.ascii.eqlIgnoreCase(field.name, ini_hkv.header)) {
                         comptime var field_type = field.type;
                         if (field_info == .Optional) {
                             field_type = Child(field_type);
@@ -128,11 +129,11 @@ pub fn Ini(comptime T: type) type {
                                 @field(data, field.name) = field_type{};
                         }
                         var inner_struct = utils.unwrapIfOptional(field.type, @field(data, field.name));
-                        try self.setStructVal(field_type, &inner_struct, kv, "");
+                        try self.setStructVal(field_type, &inner_struct, .{ .key = ini_hkv.key, .value = ini_hkv.value });
                         @field(data, field.name) = inner_struct;
                     }
-                } else if (ns.len == 0 and std.ascii.eqlIgnoreCase(field.name, kv.key)) {
-                    const conv_value = try self.convert(field.type, kv.value);
+                } else if (ini_hkv.header.len == 0 and std.ascii.eqlIgnoreCase(field.name, ini_hkv.key)) {
+                    const conv_value = try self.convert(field.type, ini_hkv.value);
                     if (!utils.isDefaultValue(field, @field(data, field.name))) self.free_field(data, field);
                     @field(data, field.name) = conv_value;
                 }

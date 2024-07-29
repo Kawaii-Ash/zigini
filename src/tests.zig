@@ -15,6 +15,15 @@ const Config = struct {
     @"Other Config": ?NestedConfig = null,
 };
 
+fn handleField(_: std.mem.Allocator, field: ini.IniField) ?ini.IniField {
+    var mapped_field = field;
+
+    if (std.mem.eql(u8, field.header, "Nested Config")) mapped_field.header = "nested_config";
+    if (std.mem.eql(u8, field.key, "other")) mapped_field.key = "num";
+
+    return mapped_field;
+}
+
 test "Read ini without mapping" {
     var fbs = std.io.fixedBufferStream(
         \\string=A String
@@ -30,7 +39,7 @@ test "Read ini without mapping" {
 
     var ini_conf = Ini(Config).init(std.testing.allocator);
     defer ini_conf.deinit();
-    const config = try ini_conf.readToStruct(fbs.reader());
+    const config = try ini_conf.readToStruct(fbs.reader(), ";#", null);
 
     try std.testing.expectEqualStrings("Default String", config.string.?);
     try std.testing.expectEqualStrings("Another String", config.nt_string);
@@ -50,10 +59,7 @@ test "Read ini with mapping" {
     var ini_conf = Ini(Config).init(std.testing.allocator);
     defer ini_conf.deinit();
 
-    const config = try ini_conf.readToStructWithMap(fbs.reader(), .{
-        .{ "Nested Config", "nested_config" },
-        .{ "other", "num" },
-    });
+    const config = try ini_conf.readToStruct(fbs.reader(), ";#", handleField);
 
     try std.testing.expect(config.num == 33);
     try std.testing.expect(config.nested_config.num == 12);
@@ -68,7 +74,7 @@ test "Write without namespace" {
 
     var buf: [100]u8 = undefined;
     var fbs = std.io.fixedBufferStream(&buf);
-    try ini.writeFromStructWithMap(conf, fbs.writer(), null, .{
+    try ini.writeFromStruct(conf, fbs.writer(), null, false, .{
         .{ "nested_config", "Nested Config" },
         .{ "string", "new_string" },
     });
@@ -92,7 +98,7 @@ test "Write with namespace" {
 
     var buf: [100]u8 = undefined;
     var fbs = std.io.fixedBufferStream(&buf);
-    try ini.writeFromStruct(conf, fbs.writer(), "A Namespace");
+    try ini.writeFromStruct(conf, fbs.writer(), "A Namespace", false, .{});
     const ini_str = fbs.getWritten();
 
     const expected =
