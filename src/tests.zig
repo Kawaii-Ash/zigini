@@ -15,11 +15,13 @@ const Config = struct {
     @"Other Config": ?NestedConfig = null,
 };
 
-fn handleIncorrectConfigField(key: []const u8, _: []const u8) ?ini.HandlerResult {
-    if (std.mem.eql(u8, key, "Nested Config")) return .{ .changed = .key, .str = "nested_config" };
-    if (std.mem.eql(u8, key, "other")) return .{ .changed = .key, .str = "num" };
+fn handleField(_: std.mem.Allocator, field: ini.IniField) ?ini.IniField {
+    var mapped_field = field;
 
-    return null;
+    if (std.mem.eql(u8, field.header, "Nested Config")) mapped_field.header = "nested_config";
+    if (std.mem.eql(u8, field.key, "other")) mapped_field.key = "num";
+
+    return mapped_field;
 }
 
 test "Read ini without mapping" {
@@ -37,7 +39,7 @@ test "Read ini without mapping" {
 
     var ini_conf = Ini(Config).init(std.testing.allocator);
     defer ini_conf.deinit();
-    const config = try ini_conf.readToStruct(fbs.reader(), ";#", null, null);
+    const config = try ini_conf.readToStruct(fbs.reader(), ";#", null);
 
     try std.testing.expectEqualStrings("Default String", config.string.?);
     try std.testing.expectEqualStrings("Another String", config.nt_string);
@@ -57,7 +59,7 @@ test "Read ini with mapping" {
     var ini_conf = Ini(Config).init(std.testing.allocator);
     defer ini_conf.deinit();
 
-    const config = try ini_conf.readToStruct(fbs.reader(), ";#", handleIncorrectConfigField, null);
+    const config = try ini_conf.readToStruct(fbs.reader(), ";#", handleField);
 
     try std.testing.expect(config.num == 33);
     try std.testing.expect(config.nested_config.num == 12);

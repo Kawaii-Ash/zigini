@@ -18,15 +18,17 @@ const boolStringMap = if (is_12)
 else
     std.StaticStringMap(bool).initComptime(bool_string);
 
-pub const HandlerResult = struct {
-    changed: enum { key, value, invalid },
-    str: []const u8,
+pub const IniField = struct {
+    header: []const u8 = "",
+    key: []const u8,
+    value: []const u8,
+    allocated: struct { header: bool = false, key: bool = false, value: bool = false } = .{},
 };
 
 pub fn Ini(comptime T: type) type {
     return struct {
         const Self = @This();
-        const TryMapFieldFn = fn ([]const u8, []const u8) ?HandlerResult;
+        const FieldHandlerFn = fn (allocator: std.mem.Allocator, field: IniField) ?IniField;
 
         data: T,
         allocator: std.mem.Allocator,
@@ -76,19 +78,13 @@ pub fn Ini(comptime T: type) type {
                 self.allocator.free(utils.unwrapIfOptional(field.type, val));
         }
 
-        pub fn readFileToStruct(self: *Self, path: []const u8, comptime try_map_field_fn: ?TryMapFieldFn, has_mapped_fields: ?*bool) !T {
+        pub fn readFileToStruct(self: *Self, path: []const u8, comptime handler: ?FieldHandlerFn) !T {
             const file = try std.fs.cwd().openFile(path, .{});
             defer file.close();
-            return self.readToStruct(file.reader(), try_map_field_fn, has_mapped_fields);
+            return self.readToStruct(file.reader(), handler);
         }
 
-        pub fn readToStruct(
-            self: *Self,
-            reader: anytype,
-            comment_characters: []const u8,
-            comptime try_map_field_fn: ?TryMapFieldFn,
-            has_mapped_fields: ?*bool,
-        ) !T {
+        pub fn readToStruct(self: *Self, reader: anytype, comment_characters: []const u8, comptime handler_opt: ?FieldHandlerFn) !T {
             var parser = ini.parse(self.allocator, reader, comment_characters);
             defer parser.deinit();
 
@@ -102,7 +98,16 @@ pub fn Ini(comptime T: type) type {
                         @memcpy(ns, heading);
                     },
                     .property => |kv| {
-                        try self.setStructVal(T, &self.data, kv, ns, try_map_field_fn, has_mapped_fields);
+                        var ini_hkv_opt: ?IniField = .{ .key = kv.key, .value = kv.value, .header = ns };
+                        if (handler_opt) |handler| ini_hkv_opt = @call(.always_inline, handler, .{ self.allocator, ini_hkv_opt.? });
+                        if (ini_hkv_opt) |ini_hkv| {
+                            try self.setStructVal(T, &self.data, ini_hkv);
+
+                            // Check if they were allocated by the handler fn and free if needed
+                            if (ini_hkv.allocated.header) self.allocator.free(ini_hkv.header);
+                            if (ini_hkv.allocated.key) self.allocator.free(ini_hkv.key);
+                            if (ini_hkv.allocated.value) self.allocator.free(ini_hkv.value);
+                        }
                     },
                     .enumeration => {},
                 }
@@ -111,77 +116,26 @@ pub fn Ini(comptime T: type) type {
             return self.data;
         }
 
-        fn setStructVal(
-            self: *Self,
-            comptime T1: type,
-            data: *T1,
-            kv: ini.KeyValue,
-            ns: []const u8,
-            comptime try_map_field_fn: ?TryMapFieldFn,
-            has_mapped_fields: ?*bool,
-        ) !void {
+        fn setStructVal(self: *Self, comptime T1: type, data: *T1, ini_hkv: IniField) !void {
             inline for (std.meta.fields(T1)) |field| {
                 const field_info = @typeInfo(field.type);
                 const is_opt_struct = field_info == .Optional and @typeInfo(Child(field.type)) == .Struct;
-
                 if (field_info == .Struct or is_opt_struct) {
-                    if (ns.len != 0) {
-                        var namespace = ns;
-
-                        if (try_map_field_fn) |try_map_field| {
-                            const maybe_new_ns = @call(.always_inline, try_map_field, .{ ns, "" });
-                            if (maybe_new_ns) |new_ns| {
-                                if (has_mapped_fields) |ptr| ptr.* = new_ns.changed == .invalid or !std.ascii.eqlIgnoreCase(namespace, new_ns.str);
-                                namespace = new_ns.str;
-                            }
+                    if (ini_hkv.header.len != 0 and std.ascii.eqlIgnoreCase(field.name, ini_hkv.header)) {
+                        comptime var field_type = field.type;
+                        if (field_info == .Optional) {
+                            field_type = Child(field_type);
+                            if (@field(data, field.name) == null)
+                                @field(data, field.name) = field_type{};
                         }
-
-                        if (std.ascii.eqlIgnoreCase(field.name, namespace)) {
-                            comptime var field_type = field.type;
-                            if (field_info == .Optional) {
-                                field_type = Child(field_type);
-                                if (@field(data, field.name) == null)
-                                    @field(data, field.name) = field_type{};
-                            }
-                            var inner_struct = utils.unwrapIfOptional(field.type, @field(data, field.name));
-                            try self.setStructVal(field_type, &inner_struct, kv, "", try_map_field_fn, has_mapped_fields);
-                            @field(data, field.name) = inner_struct;
-                        }
+                        var inner_struct = utils.unwrapIfOptional(field.type, @field(data, field.name));
+                        try self.setStructVal(field_type, &inner_struct, .{ .key = ini_hkv.key, .value = ini_hkv.value });
+                        @field(data, field.name) = inner_struct;
                     }
-                } else if (ns.len == 0) {
-                    var key: []const u8 = kv.key;
-                    var key_changed = false;
-
-                    if (try_map_field_fn) |try_map_field| {
-                        const maybe_new_key = @call(.always_inline, try_map_field, .{ kv.key, kv.value });
-                        if (maybe_new_key) |new_key| {
-                            if (new_key.changed == .key) {
-                                if (has_mapped_fields) |ptr| ptr.* = ptr.* or !std.ascii.eqlIgnoreCase(key, new_key.str);
-                                key = new_key.str;
-                                key_changed = true;
-                            } else if (new_key.changed == .invalid) {
-                                if (has_mapped_fields) |ptr| ptr.* = true;
-                            }
-                        }
-                    }
-
-                    if (std.ascii.eqlIgnoreCase(field.name, key)) {
-                        var value: []const u8 = kv.value;
-
-                        if (!key_changed) {
-                            if (try_map_field_fn) |try_map_field| {
-                                const maybe_new_value = @call(.always_inline, try_map_field, .{ kv.key, kv.value });
-                                if (maybe_new_value) |new_value| {
-                                    if (has_mapped_fields) |ptr| ptr.* = ptr.* or !std.ascii.eqlIgnoreCase(value, new_value.str);
-                                    value = new_value.str;
-                                }
-                            }
-                        }
-
-                        const conv_value = try self.convert(field.type, value);
-                        if (!utils.isDefaultValue(field, @field(data, field.name))) self.free_field(data, field);
-                        @field(data, field.name) = conv_value;
-                    }
+                } else if (ini_hkv.header.len == 0 and std.ascii.eqlIgnoreCase(field.name, ini_hkv.key)) {
+                    const conv_value = try self.convert(field.type, ini_hkv.value);
+                    if (!utils.isDefaultValue(field, @field(data, field.name))) self.free_field(data, field);
+                    @field(data, field.name) = conv_value;
                 }
             }
         }
