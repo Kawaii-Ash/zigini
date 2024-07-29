@@ -78,10 +78,10 @@ pub fn Ini(comptime T: type) type {
                 self.allocator.free(utils.unwrapIfOptional(field.type, val));
         }
 
-        pub fn readFileToStruct(self: *Self, path: []const u8, comptime handler: ?FieldHandlerFn) !T {
+        pub fn readFileToStruct(self: *Self, path: []const u8, comment_characters: []const u8, comptime handler: ?FieldHandlerFn) !T {
             const file = try std.fs.cwd().openFile(path, .{});
             defer file.close();
-            return self.readToStruct(file.reader(), handler);
+            return self.readToStruct(file.reader(), comment_characters, handler);
         }
 
         pub fn readToStruct(self: *Self, reader: anytype, comment_characters: []const u8, comptime handler_opt: ?FieldHandlerFn) !T {
