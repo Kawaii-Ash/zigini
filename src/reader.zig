@@ -82,8 +82,14 @@ pub fn Ini(comptime T: type) type {
             return self.readToStruct(file.reader(), try_map_field_fn, has_mapped_fields);
         }
 
-        pub fn readToStruct(self: *Self, reader: anytype, comptime try_map_field_fn: ?TryMapFieldFn, has_mapped_fields: ?*bool) !T {
-            var parser = ini.parse(self.allocator, reader);
+        pub fn readToStruct(
+            self: *Self,
+            reader: anytype,
+            comment_characters: []const u8,
+            comptime try_map_field_fn: ?TryMapFieldFn,
+            has_mapped_fields: ?*bool,
+        ) !T {
+            var parser = ini.parse(self.allocator, reader, comment_characters);
             defer parser.deinit();
 
             var ns: []u8 = &.{};
