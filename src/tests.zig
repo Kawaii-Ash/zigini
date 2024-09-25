@@ -39,7 +39,7 @@ test "Read ini without mapping" {
 
     var ini_conf = Ini(Config).init(std.testing.allocator);
     defer ini_conf.deinit();
-    const config = try ini_conf.readToStruct(fbs.reader(), ";#", null);
+    const config = try ini_conf.readToStruct(fbs.reader(), .{});
 
     try std.testing.expectEqualStrings("Default String", config.string.?);
     try std.testing.expectEqualStrings("Another String", config.nt_string);
@@ -59,10 +59,20 @@ test "Read ini with mapping" {
     var ini_conf = Ini(Config).init(std.testing.allocator);
     defer ini_conf.deinit();
 
-    const config = try ini_conf.readToStruct(fbs.reader(), ";#", handleField);
+    const config = try ini_conf.readToStruct(fbs.reader(), .{ .fieldHandler = handleField });
 
     try std.testing.expect(config.num == 33);
     try std.testing.expect(config.nested_config.num == 12);
+}
+
+fn mapFields(comptime header: ?[]const u8, comptime name: ?[]const u8) ?[]const u8 {
+    if (name == null) {
+        if (std.mem.eql(u8, header.?, "nested_config")) return "Nested Config";
+        return null;
+    }
+
+    if (std.mem.eql(u8, name.?, "string")) return "new_string";
+    return name;
 }
 
 test "Write without namespace" {
@@ -74,10 +84,7 @@ test "Write without namespace" {
 
     var buf: [100]u8 = undefined;
     var fbs = std.io.fixedBufferStream(&buf);
-    try ini.writeFromStruct(conf, fbs.writer(), null, false, .{
-        .{ "nested_config", "Nested Config" },
-        .{ "string", "new_string" },
-    });
+    try ini.writeFromStruct(conf, fbs.writer(), null, .{ .renameHandler = mapFields, .write_default_values = false });
     const ini_str = fbs.getWritten();
 
     const expected =
@@ -98,7 +105,7 @@ test "Write with namespace" {
 
     var buf: [100]u8 = undefined;
     var fbs = std.io.fixedBufferStream(&buf);
-    try ini.writeFromStruct(conf, fbs.writer(), "A Namespace", false, .{});
+    try ini.writeFromStruct(conf, fbs.writer(), "A Namespace", .{ .write_default_values = false });
     const ini_str = fbs.getWritten();
 
     const expected =

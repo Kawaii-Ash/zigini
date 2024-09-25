@@ -4,6 +4,7 @@ const utils = @import("utils.zig");
 const ini = @import("ini");
 const Child = std.meta.Child;
 
+// Temporary Compatibility with 0.12.0 and 0.13.0
 const is_12 = builtin.zig_version.minor == 12;
 
 const bool_string = .{
@@ -29,6 +30,10 @@ pub fn Ini(comptime T: type) type {
     return struct {
         const Self = @This();
         const FieldHandlerFn = fn (allocator: std.mem.Allocator, field: IniField) ?IniField;
+        const ReadOptions = struct {
+            fieldHandler: ?FieldHandlerFn = null,
+            comment_characters: []const u8 = ";#",
+        };
 
         data: T,
         allocator: std.mem.Allocator,
@@ -78,14 +83,14 @@ pub fn Ini(comptime T: type) type {
                 self.allocator.free(utils.unwrapIfOptional(field.type, val));
         }
 
-        pub fn readFileToStruct(self: *Self, path: []const u8, comment_characters: []const u8, comptime handler: ?FieldHandlerFn) !T {
+        pub fn readFileToStruct(self: *Self, path: []const u8, comptime opts: ReadOptions) !T {
             const file = try std.fs.cwd().openFile(path, .{});
             defer file.close();
-            return self.readToStruct(file.reader(), comment_characters, handler);
+            return self.readToStruct(file.reader(), opts);
         }
 
-        pub fn readToStruct(self: *Self, reader: anytype, comment_characters: []const u8, comptime handler_opt: ?FieldHandlerFn) !T {
-            var parser = ini.parse(self.allocator, reader, comment_characters);
+        pub fn readToStruct(self: *Self, reader: anytype, comptime opts: ReadOptions) !T {
+            var parser = ini.parse(self.allocator, reader, opts.comment_characters);
             defer parser.deinit();
 
             var ns: []u8 = &.{};
@@ -99,7 +104,7 @@ pub fn Ini(comptime T: type) type {
                     },
                     .property => |kv| {
                         var ini_hkv_opt: ?IniField = .{ .key = kv.key, .value = kv.value, .header = ns };
-                        if (handler_opt) |handler| ini_hkv_opt = @call(.always_inline, handler, .{ self.allocator, ini_hkv_opt.? });
+                        if (opts.fieldHandler) |handler| ini_hkv_opt = @call(.always_inline, handler, .{ self.allocator, ini_hkv_opt.? });
                         if (ini_hkv_opt) |ini_hkv| {
                             try self.setStructVal(T, &self.data, ini_hkv);
 
