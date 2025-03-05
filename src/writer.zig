@@ -18,9 +18,9 @@ pub fn writeFromStruct(data: anytype, writer: anytype, comptime namespace: ?[]co
 
     inline for (std.meta.fields(@TypeOf(data))) |field| {
         switch (@typeInfo(field.type)) {
-            .Struct => struct_fields = @constCast(struct_fields ++ .{field}),
+            .@"struct" => struct_fields = @constCast(struct_fields ++ .{field}),
             else => |t_info| {
-                if (t_info == .Optional and @typeInfo(Child(field.type)) == .Struct) {
+                if (t_info == .optional and @typeInfo(Child(field.type)) == .@"struct") {
                     struct_fields = @constCast(struct_fields ++ .{field});
                     continue;
                 }
@@ -44,7 +44,7 @@ pub fn writeFromStruct(data: anytype, writer: anytype, comptime namespace: ?[]co
 
                 const value = @field(data, field.name);
                 if (opts.write_default_values or !utils.isDefaultValue(field, value)) {
-                    if (t_info == .Optional and value == null) {
+                    if (t_info == .optional and value == null) {
                         try writeProperty(writer, field_name, "null");
                     } else {
                         try writeProperty(writer, field_name, utils.unwrapIfOptional(field.type, value));
@@ -56,7 +56,7 @@ pub fn writeFromStruct(data: anytype, writer: anytype, comptime namespace: ?[]co
 
     if (namespace == null or namespace.?.len == 0) {
         inline for (struct_fields) |field| {
-            if (@typeInfo(field.type) == .Struct) {
+            if (@typeInfo(field.type) == .@"struct") {
                 try writeFromStruct(@field(data, field.name), writer, field.name, opts);
             } else if (@field(data, field.name)) |inner_data| {
                 try writeFromStruct(inner_data, writer, field.name, opts);
@@ -67,13 +67,13 @@ pub fn writeFromStruct(data: anytype, writer: anytype, comptime namespace: ?[]co
 
 fn writeProperty(writer: anytype, field_name: []const u8, val: anytype) !void {
     switch (@typeInfo(@TypeOf(val))) {
-        .Bool => {
+        .bool => {
             try writer.print("{s}={s}\n", .{ field_name, if (val) "true" else "false" });
         },
-        .Int, .ComptimeInt, .Float, .ComptimeFloat => {
+        .int, .comptime_int, .float, .comptime_float => {
             try writer.print("{s}={d}\n", .{ field_name, val });
         },
-        .Enum => {
+        .@"enum" => {
             try writer.print("{s}={s}\n", .{ field_name, @tagName(val) });
         },
         else => {

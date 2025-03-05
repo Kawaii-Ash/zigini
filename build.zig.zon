@@ -1,6 +1,7 @@
 .{
-    .name = "zigini",
-    .version = "0.3.0",
+    .name = .zigini,
+    .version = "0.3.1",
+    .fingerprint = 0xa1be3af8ed012905,
     .dependencies = .{
         .ini = .{
             .url = "https://github.com/ziglibs/ini/archive/e18d36665905c1e7ba0c1ce3e8780076b33e3002.tar.gz",
