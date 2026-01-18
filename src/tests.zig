@@ -25,7 +25,7 @@ fn handleField(_: std.mem.Allocator, field: ini.IniField) ?ini.IniField {
 }
 
 test "Read ini without mapping" {
-    var fbs = std.io.fixedBufferStream(
+    var reader = std.Io.Reader.fixed(
         \\string=A String
         \\string=Default String
         \\nt_string=Another String
@@ -39,7 +39,7 @@ test "Read ini without mapping" {
 
     var ini_conf = Ini(Config).init(std.testing.allocator);
     defer ini_conf.deinit();
-    const config = try ini_conf.readToStruct(fbs.reader(), .{});
+    const config = try ini_conf.readToStruct(&reader, .{});
 
     try std.testing.expectEqualStrings("Default String", config.string.?);
     try std.testing.expectEqualStrings("Another String", config.nt_string);
@@ -50,7 +50,7 @@ test "Read ini without mapping" {
 }
 
 test "Read ini with mapping" {
-    var fbs = std.io.fixedBufferStream(
+    var reader = std.Io.Reader.fixed(
         \\other=33
         \\[Nested Config]
         \\other=12
@@ -59,7 +59,7 @@ test "Read ini with mapping" {
     var ini_conf = Ini(Config).init(std.testing.allocator);
     defer ini_conf.deinit();
 
-    const config = try ini_conf.readToStruct(fbs.reader(), .{ .fieldHandler = handleField });
+    const config = try ini_conf.readToStruct(&reader, .{ .fieldHandler = handleField });
 
     try std.testing.expect(config.num == 33);
     try std.testing.expect(config.nested_config.num == 12);
@@ -83,9 +83,9 @@ test "Write without namespace" {
     };
 
     var buf: [100]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buf);
-    try ini.writeFromStruct(conf, fbs.writer(), null, .{ .renameHandler = mapFields, .write_default_values = false });
-    const ini_str = fbs.getWritten();
+    var writer = std.Io.Writer.fixed(&buf);
+    try ini.writeFromStruct(conf, &writer, null, .{ .renameHandler = mapFields, .write_default_values = false });
+    const ini_str = writer.buffer[0..writer.end];
 
     const expected =
         \\new_string=String!
@@ -104,9 +104,9 @@ test "Write with namespace" {
     const conf = Config{ .num = 98, .string = "Some String", .nested_config = .{ .num = 71 } };
 
     var buf: [100]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buf);
-    try ini.writeFromStruct(conf, fbs.writer(), "A Namespace", .{ .write_default_values = false });
-    const ini_str = fbs.getWritten();
+    var writer = std.Io.Writer.fixed(&buf);
+    try ini.writeFromStruct(conf, &writer, "A Namespace", .{ .write_default_values = false });
+    const ini_str = writer.buffer[0..writer.end];
 
     const expected =
         \\[A Namespace]

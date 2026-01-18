@@ -77,10 +77,13 @@ pub fn Ini(comptime T: type) type {
         pub fn readFileToStruct(self: *Self, path: []const u8, comptime opts: ReadOptions) !T {
             const file = try std.fs.cwd().openFile(path, .{});
             defer file.close();
-            return self.readToStruct(file.reader(), opts);
+
+            var buf: [4096]u8 = undefined;
+            var reader = file.reader(&buf);
+            return self.readToStruct(&reader.interface, opts);
         }
 
-        pub fn readToStruct(self: *Self, reader: anytype, comptime opts: ReadOptions) !T {
+        pub fn readToStruct(self: *Self, reader: *std.Io.Reader, comptime opts: ReadOptions) !T {
             var parser = ini.parse(self.allocator, reader, opts.comment_characters);
             defer parser.deinit();
 
@@ -141,7 +144,7 @@ pub fn Ini(comptime T: type) type {
                 .int => {
                     if (val.len == 1) {
                         const char = val[0];
-                        if (std.ascii.isASCII(char) and !std.ascii.isDigit(char))
+                        if (std.ascii.isAscii(char) and !std.ascii.isDigit(char))
                             return char;
                     }
                     return try std.fmt.parseInt(T1, val, 0);

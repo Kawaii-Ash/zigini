@@ -12,7 +12,7 @@ const WriteOptions = struct {
     write_default_values: bool = true,
 };
 
-pub fn writeFromStruct(data: anytype, writer: anytype, comptime namespace: ?[]const u8, comptime opts: WriteOptions) !void {
+pub fn writeFromStruct(data: anytype, writer: *std.Io.Writer, comptime namespace: ?[]const u8, comptime opts: WriteOptions) !void {
     comptime var should_write_ns = namespace != null and namespace.?.len != 0;
     comptime var struct_fields: []std.builtin.Type.StructField = &.{};
 
@@ -65,7 +65,7 @@ pub fn writeFromStruct(data: anytype, writer: anytype, comptime namespace: ?[]co
     }
 }
 
-fn writeProperty(writer: anytype, field_name: []const u8, val: anytype) !void {
+fn writeProperty(writer: *std.Io.Writer, field_name: []const u8, val: anytype) !void {
     switch (@typeInfo(@TypeOf(val))) {
         .bool => {
             try writer.print("{s}={s}\n", .{ field_name, if (val) "true" else "false" });
