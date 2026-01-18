@@ -21,8 +21,10 @@ pub fn Ini(comptime T: type) type {
     return struct {
         const Self = @This();
         const FieldHandlerFn = fn (allocator: std.mem.Allocator, field: IniField) ?IniField;
+        const ErrorHandlerFn = fn (type_name: []const u8, key: []const u8, value: []const u8, err: anyerror) void;
         const ReadOptions = struct {
             fieldHandler: ?FieldHandlerFn = null,
+            errorHandler: ?ErrorHandlerFn = null,
             comment_characters: []const u8 = ";#",
         };
 
@@ -100,7 +102,7 @@ pub fn Ini(comptime T: type) type {
                         var ini_hkv_opt: ?IniField = .{ .key = kv.key, .value = kv.value, .header = ns };
                         if (opts.fieldHandler) |handler| ini_hkv_opt = @call(.always_inline, handler, .{ self.allocator, ini_hkv_opt.? });
                         if (ini_hkv_opt) |ini_hkv| {
-                            try self.setStructVal(T, &self.data, ini_hkv);
+                            try self.setStructVal(T, &self.data, ini_hkv, opts.errorHandler);
 
                             // Check if they were allocated by the handler fn and free if needed
                             if (ini_hkv.allocated.header) self.allocator.free(ini_hkv.header);
@@ -115,7 +117,7 @@ pub fn Ini(comptime T: type) type {
             return self.data;
         }
 
-        fn setStructVal(self: *Self, comptime T1: type, data: *T1, ini_hkv: IniField) !void {
+        fn setStructVal(self: *Self, comptime T1: type, data: *T1, ini_hkv: IniField, error_handler: ?ErrorHandlerFn) !void {
             inline for (std.meta.fields(T1)) |field| {
                 const field_info = @typeInfo(field.type);
                 const is_opt_struct = field_info == .optional and @typeInfo(Child(field.type)) == .@"struct";
@@ -128,11 +130,14 @@ pub fn Ini(comptime T: type) type {
                                 @field(data, field.name) = field_type{};
                         }
                         var inner_struct = utils.unwrapIfOptional(field.type, @field(data, field.name));
-                        try self.setStructVal(field_type, &inner_struct, .{ .key = ini_hkv.key, .value = ini_hkv.value });
+                        try self.setStructVal(field_type, &inner_struct, .{ .key = ini_hkv.key, .value = ini_hkv.value }, error_handler);
                         @field(data, field.name) = inner_struct;
                     }
                 } else if (ini_hkv.header.len == 0 and std.ascii.eqlIgnoreCase(field.name, ini_hkv.key)) {
-                    const conv_value = try self.convert(field.type, ini_hkv.value);
+                    const conv_value = self.convert(field.type, ini_hkv.value) catch |err| {
+                        if (error_handler) |handler| @call(.always_inline, handler, .{ @typeName(field.type), ini_hkv.key, ini_hkv.value, err });
+                        return err;
+                    };
                     if (!utils.isDefaultValue(field, @field(data, field.name))) self.free_field(data, field);
                     @field(data, field.name) = conv_value;
                 }
