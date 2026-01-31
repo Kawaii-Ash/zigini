@@ -14,13 +14,12 @@ pub const IniField = struct {
     header: []const u8 = "",
     key: []const u8,
     value: []const u8,
-    allocated: struct { header: bool = false, key: bool = false, value: bool = false } = .{},
 };
 
 pub fn Ini(comptime T: type) type {
     return struct {
         const Self = @This();
-        const FieldHandlerFn = fn (allocator: std.mem.Allocator, field: IniField) ?IniField;
+        const FieldHandlerFn = fn (arena: std.mem.Allocator, field: IniField) ?IniField;
         const ErrorHandlerFn = fn (type_name: []const u8, key: []const u8, value: []const u8, err: anyerror) void;
         const ReadOptions = struct {
             fieldHandler: ?FieldHandlerFn = null,
@@ -28,52 +27,20 @@ pub fn Ini(comptime T: type) type {
             comment_characters: []const u8 = ";#",
         };
 
-        data: T,
-        allocator: std.mem.Allocator,
+        arena: std.heap.ArenaAllocator,
 
         pub fn init(allocator: std.mem.Allocator) Self {
             return .{
-                .data = T{},
-                .allocator = allocator,
+                .arena = std.heap.ArenaAllocator.init(allocator),
             };
         }
 
+        pub fn reset(self: *Self) void {
+            _ = self.arena.reset(.retain_capacity);
+        }
+
         pub fn deinit(self: *Self) void {
-            self.free_allocated_fields(T, self.data);
-        }
-
-        fn free_allocated_fields(self: *Self, comptime T1: type, data: T1) void {
-            inline for (std.meta.fields(T1)) |field| attempt_free: {
-                const val = @field(data, field.name);
-                comptime var field_type = field.type;
-                comptime var t_info = @typeInfo(field.type);
-                if (t_info == .optional) {
-                    if (val == null) break :attempt_free;
-                    field_type = Child(field.type);
-                    t_info = @typeInfo(field_type);
-                }
-
-                if (t_info == .pointer and !utils.isDefaultValue(field, val)) {
-                    self.allocator.free(utils.unwrapIfOptional(field.type, val));
-                } else if (t_info == .@"struct") {
-                    const unwrapped_val = utils.unwrapIfOptional(field.type, @field(data, field.name));
-                    self.free_allocated_fields(field_type, unwrapped_val);
-                }
-            }
-        }
-
-        fn free_field(self: *Self, data: anytype, field: anytype) void {
-            const val = @field(data, field.name);
-            comptime var field_type = field.type;
-            comptime var t_info = @typeInfo(field_type);
-            if (t_info == .optional) {
-                if (val == null) return;
-                field_type = Child(field_type);
-                t_info = @typeInfo(field_type);
-            }
-
-            if (t_info == .pointer and !utils.isDefaultValue(field, val))
-                self.allocator.free(utils.unwrapIfOptional(field.type, val));
+            self.arena.deinit();
         }
 
         pub fn readFileToStruct(self: *Self, path: []const u8, comptime opts: ReadOptions) !T {
@@ -86,35 +53,38 @@ pub fn Ini(comptime T: type) type {
         }
 
         pub fn readToStruct(self: *Self, reader: *std.Io.Reader, comptime opts: ReadOptions) !T {
-            var parser = ini.parse(self.allocator, reader, opts.comment_characters);
+            var data: T = .{};
+            const ch_allocator = self.arena.child_allocator;
+            var parser = ini.parse(ch_allocator, reader, opts.comment_characters);
             defer parser.deinit();
 
             var ns: []u8 = &.{};
-            defer self.allocator.free(ns);
+            defer ch_allocator.free(ns);
 
             while (try parser.next()) |record| {
                 switch (record) {
                     .section => |heading| {
-                        ns = try self.allocator.realloc(ns, heading.len);
+                        ns = try ch_allocator.realloc(ns, heading.len);
                         @memcpy(ns, heading);
                     },
                     .property => |kv| {
                         var ini_hkv_opt: ?IniField = .{ .key = kv.key, .value = kv.value, .header = ns };
-                        if (opts.fieldHandler) |handler| ini_hkv_opt = @call(.always_inline, handler, .{ self.allocator, ini_hkv_opt.? });
-                        if (ini_hkv_opt) |ini_hkv| {
-                            try self.setStructVal(T, &self.data, ini_hkv, opts.errorHandler);
+                        var fh_arena = std.heap.ArenaAllocator.init(ch_allocator);
+                        defer fh_arena.deinit();
 
-                            // Check if they were allocated by the handler fn and free if needed
-                            if (ini_hkv.allocated.header) self.allocator.free(ini_hkv.header);
-                            if (ini_hkv.allocated.key) self.allocator.free(ini_hkv.key);
-                            if (ini_hkv.allocated.value) self.allocator.free(ini_hkv.value);
+                        if (opts.fieldHandler) |handler| {
+                            ini_hkv_opt = @call(.always_inline, handler, .{ fh_arena.allocator(), ini_hkv_opt.? });
+                        }
+
+                        if (ini_hkv_opt) |ini_hkv| {
+                            try self.setStructVal(T, &data, ini_hkv, opts.errorHandler);
                         }
                     },
                     .enumeration => {},
                 }
             }
 
-            return self.data;
+            return data;
         }
 
         fn setStructVal(self: *Self, comptime T1: type, data: *T1, ini_hkv: IniField, error_handler: ?ErrorHandlerFn) !void {
@@ -138,13 +108,12 @@ pub fn Ini(comptime T: type) type {
                         if (error_handler) |handler| @call(.always_inline, handler, .{ @typeName(field.type), ini_hkv.key, ini_hkv.value, err });
                         return err;
                     };
-                    if (!utils.isDefaultValue(field, @field(data, field.name))) self.free_field(data, field);
                     @field(data, field.name) = conv_value;
                 }
             }
         }
 
-        fn convert(self: Self, comptime T1: type, val: []const u8) !T1 {
+        fn convert(self: *Self, comptime T1: type, val: []const u8) !T1 {
             return switch (@typeInfo(T1)) {
                 .int => {
                     if (val.len == 1) {
@@ -163,8 +132,9 @@ pub fn Ini(comptime T: type) type {
                 },
                 .pointer => |p| {
                     if (p.child != u8) @compileError("Type Unsupported");
-                    if (p.sentinel_ptr != null) return try self.allocator.dupeZ(u8, val);
-                    return try self.allocator.dupe(u8, val);
+                    const arena_allocator = self.arena.allocator();
+                    if (p.sentinel_ptr != null) return try arena_allocator.dupeZ(u8, val);
+                    return try arena_allocator.dupe(u8, val);
                 },
                 else => @compileError("Type Unsupported"),
             };

@@ -15,16 +15,19 @@ const Config = struct {
     @"Other Config": ?NestedConfig = null,
 };
 
-fn handleField(_: std.mem.Allocator, field: ini.IniField) ?ini.IniField {
+fn handleField(arena: std.mem.Allocator, field: ini.IniField) ?ini.IniField {
     var mapped_field = field;
 
-    if (std.mem.eql(u8, field.header, "Nested Config")) mapped_field.header = "nested_config";
+    const header = arena.alloc(u8, 13) catch return null;
+    @memcpy(header, "nested_config");
+
+    if (std.mem.eql(u8, field.header, "Nested Config")) mapped_field.header = header;
     if (std.mem.eql(u8, field.key, "other")) mapped_field.key = "num";
 
     return mapped_field;
 }
 
-test "Read ini without mapping" {
+test "Read: no field handler" {
     var reader = std.Io.Reader.fixed(
         \\string=A String
         \\string=Default String
@@ -49,7 +52,7 @@ test "Read ini without mapping" {
     try std.testing.expect(config.@"Other Config".?.num == 10);
 }
 
-test "Read ini with mapping" {
+test "Read: with field handler" {
     var reader = std.Io.Reader.fixed(
         \\other=33
         \\[Nested Config]
@@ -75,7 +78,7 @@ fn mapFields(comptime header: ?[]const u8, comptime name: ?[]const u8) ?[]const 
     return name;
 }
 
-test "Write without namespace" {
+test "Write: no namespace" {
     const conf = Config{
         .num = 10,
         .string = "String!",
@@ -100,7 +103,7 @@ test "Write without namespace" {
     try std.testing.expectEqualStrings(expected, ini_str);
 }
 
-test "Write with namespace" {
+test "Write: with namespace" {
     const conf = Config{ .num = 98, .string = "Some String", .nested_config = .{ .num = 71 } };
 
     var buf: [100]u8 = undefined;
