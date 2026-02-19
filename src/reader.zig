@@ -136,6 +136,7 @@ pub fn Ini(comptime T: type) type {
                     if (p.sentinel_ptr != null) return try arena_allocator.dupeZ(u8, val);
                     return try arena_allocator.dupe(u8, val);
                 },
+                .void => return {},
                 else => @compileError("Type Unsupported"),
             };
         }
