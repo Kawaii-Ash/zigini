@@ -27,7 +27,7 @@ pub fn writeFromStruct(data: anytype, writer: *std.Io.Writer, comptime namespace
 
                 comptime var field_name: []const u8 = field.name;
                 comptime if (opts.renameHandler) |handler| {
-                    const new_field_name = @call(.always_inline, handler, .{ namespace, field_name });
+                    const new_field_name = @call(.auto, handler, .{ namespace, field_name });
                     if (new_field_name != null) {
                         field_name = new_field_name.?;
                     } else continue;
@@ -36,7 +36,7 @@ pub fn writeFromStruct(data: anytype, writer: *std.Io.Writer, comptime namespace
                 if (should_write_ns) {
                     comptime var mapped_ns: []const u8 = namespace.?;
                     comptime if (opts.renameHandler) |handler| {
-                        mapped_ns = @call(.always_inline, handler, .{ namespace, null }) orelse mapped_ns;
+                        mapped_ns = @call(.auto, handler, .{ namespace, null }) orelse mapped_ns;
                     };
                     try writer.print("[{s}]\n", .{mapped_ns});
                     should_write_ns = false;

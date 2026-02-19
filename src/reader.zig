@@ -73,7 +73,7 @@ pub fn Ini(comptime T: type) type {
                         defer fh_arena.deinit();
 
                         if (opts.fieldHandler) |handler| {
-                            ini_hkv_opt = @call(.always_inline, handler, .{ fh_arena.allocator(), ini_hkv_opt.? });
+                            ini_hkv_opt = @call(.auto, handler, .{ fh_arena.allocator(), ini_hkv_opt.? });
                         }
 
                         if (ini_hkv_opt) |ini_hkv| {
@@ -105,7 +105,7 @@ pub fn Ini(comptime T: type) type {
                     }
                 } else if (ini_hkv.header.len == 0 and std.ascii.eqlIgnoreCase(field.name, ini_hkv.key)) {
                     const conv_value = self.convert(field.type, ini_hkv.value) catch |err| {
-                        if (error_handler) |handler| @call(.always_inline, handler, .{ @typeName(field.type), ini_hkv.key, ini_hkv.value, err });
+                        if (error_handler) |handler| @call(.auto, handler, .{ @typeName(field.type), ini_hkv.key, ini_hkv.value, err });
                         return err;
                     };
                     @field(data, field.name) = conv_value;
